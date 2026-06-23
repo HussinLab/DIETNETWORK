@@ -1,0 +1,30 @@
+Bootstrap: docker
+From: python:3.11-slim-bookworm
+
+%files
+    dietnet_infer_python3115_requirements.txt /app/dietnet_infer_python3115_requirements.txt
+    infer_docker.sh /app/infer_docker.sh
+    inference.py /app/inference.py
+    inference_dataset.py /app/inference_dataset.py
+    inference_combine_results.py /app/inference_combine_results.py
+    plot_results.py /app/plot_results.py
+
+%post
+    apt-get update && apt-get install -y --no-install-recommends \
+        bc \
+        ca-certificates \
+        curl \
+        unzip \
+        && rm -rf /var/lib/apt/lists/*
+
+    curl -fsSL -o /tmp/plink.zip \
+        https://s3.amazonaws.com/plink1-assets/plink_linux_x86_64_20241022.zip \
+        && unzip -p /tmp/plink.zip plink > /usr/local/bin/plink \
+        && chmod +x /usr/local/bin/plink \
+        && rm /tmp/plink.zip
+
+    pip install --no-cache-dir -r /app/dietnet_infer_python3115_requirements.txt
+    chmod +x /app/infer_docker.sh
+
+%runscript
+    exec /bin/bash /app/infer_docker.sh "$@"
