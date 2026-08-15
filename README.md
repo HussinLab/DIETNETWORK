@@ -28,7 +28,7 @@ pip install -r DIETNETWORK/Dietnet_inference/dietnet_infer_python3115_requiremen
 ```
 
 ##### 3. Download pretrained models and training files
-Download Dietnet_inference direcotry from https://zenodo.org/records/16943452.
+Download Dietnet_inference directory from https://zenodo.org/records/16943452.
 Place them in your desired directory (you will provide this path during inference).
 
 ##### 4. Install PLINK
