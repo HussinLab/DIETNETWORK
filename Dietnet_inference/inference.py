@@ -11,19 +11,61 @@ import torch.nn.functional as F
 
 
 class InferenceDataset(Dataset):
-    def __init__(self, inference_file):
+    """Dataset of samples and their genotypes for model inference.
+
+    Number of SNPs, sample IDs and scaling factor are read from the
+    HDF5 file at construction. Genotypes are read from disk one sample at a
+    time in ``__getitem__``, and the file handle is opened on first access so
+    the dataset is safe to use with multiple DataLoader workers.
+
+    Args:
+        inference_file (str): Path to the HDF5 file. Expected datasets:
+            - ``snp_names``: SNP names, shape (nb_snps,).
+            - ``samples``: Sample IDs as bytes, shape (n_samples,).
+            - ``scale``: Scaling factor for non-missing genotypes, shape (1,).
+            - ``inputs``: Genotypes, shape (n_samples, nb_snps).
+        partition_idx (np.ndarray, optional): Indexes in HDF5 of fold test samples.
+            If partition_idx is None all samples are used.
+            Default: None.
+
+    Attributes:
+        h5_path (str): Path to the HDF5 file.
+        partition_idx (np.ndarray, optional): Indexes in HDF5 of fold test samples. If None all samples are used.
+        nb_snps (int): Number of SNPs.
+        samples (list[str]): Decoded sample IDs.
+        scale (float): Scaling factor for non-missing genotypes.
+    
+    Notes:
+        For inference on 1KGP, a partition file is provided and only the test samples are used for inference.
+        In this case, ``partition_idx`` is used to map the index to the corresponding HDF5 index.
+        For independent inference sets (not 1KGP), all samples are used for inference and ``partition_idx`` is None. 
+    
+        The genotypes are loaded lazily in ``__getitem__`` to avoid loading the entire dataset into memory at once.
+        The full genotype matrix does not fit in memory for large cohorts
+    """
+     
+    def __init__(self, inference_file, partition_idx=None):
         self.h5_path = inference_file
-        
+        self.partition_idx = partition_idx
+
+        # Load SNP names, sample IDs and scaling factor from the HDF5 file
         with h5py.File(inference_file, 'r') as f:
             self.nb_snps = f['snp_names'].shape[0]
-            self.samples = [i.decode() for i in f['samples']]
-            self.scale = f['scale'][0] 
+            self.scale = f['scale'][0]
+
+            # Not 1KGP : load all sample IDs
+            if self.partition_idx is None:
+                self.samples = [i.decode() for i in f['samples']]
+            # 1KGP  : load only the test sample IDs using the partition indexes
+            else:
+                self.samples = [f['samples'][i].decode() for i in self.partition_idx]
             
         # To open lazily in _getitem_
         self.h5_file = None
 
-    # To open lazily in _getitem_
+
     def open_file(self):
+        """Open the HDF5 file on first call (once per DataLoader worker) and return the handle."""
         if self.h5_file is None:
             self.h5_file = h5py.File(self.h5_path, "r")
         
@@ -33,11 +75,34 @@ class InferenceDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        if self.h5_file is None:
-            self.h5_file = h5py.File(self.h5_path, "r")
-        
+        """Load the genotypes of one sample from the HDF5 file.
+
+        If ``partition_idx`` is not None (1KGP inference, where only the test samples of
+        a fold are used), ``idx`` is first converted to the corresponding index
+        in the HDF5 file.
+        Otherwise (independent inference set), all samples are
+        used and ``idx`` is the HDF5 index.
+
+        Args:
+            idx (int): Index of the sample in the dataset, between 0 and
+                ``len(self) - 1``.
+
+        Returns:
+            torch.Tensor: Genotypes of the sample (0,1,2), shape (nb_snps,),
+                dtype ``torch.int8``. Missing genotypes are encoded as -1.
+        """
+        # Opening the HDF5 file lazily and avoid issues with multiple DataLoader workers
+        f = self.open_file()
+
+        # Map the dataset index to the HDF5 index (see docstring)
+        if self.partition_idx is not None:
+            real_idx = self.partition_idx[idx]
+        else:
+            real_idx = idx
+
+        # Load genotypes for the sample
         x = torch.from_numpy(
-            self.h5_file["inputs"][idx].astype(np.int8, copy=False)
+            f["inputs"][real_idx].astype(np.int8, copy=False)
         )
         
         return x
@@ -124,13 +189,26 @@ def main():
     #-------------
     # Dataset
     #-------------
-    # Pytorch Dataset of inference set
-    inference_set = InferenceDataset(args.test_h5)
+    # Inference set (pytorch Dataset)
+    # Inference in 1KGP: partition file is provided and only the test samples are used for inference
+    if args.partition is not None:
+        partition = np.load(args.partition, allow_pickle=True)
+        which_fold = args.fold
+        if which_fold < 0:
+            raise ValueError('Expected a fold number when inferring on 1KGP. Got the default {} value'.format(which_fold))
+        
+        test_idx = partition['folds_indexes'][which_fold][2] # 2 = test samples
+        
+        inference_set = InferenceDataset(args.test_h5, partition_idx=test_idx)
+
+    # Inference in independent dataset (not 1KGP): all samples are used for inference
+    else:
+        inference_set = InferenceDataset(args.test_h5)
 
     print('Inference set: {} genotypes and {} samples'.format(
         inference_set.nb_snps, len(inference_set.samples)
     ))
-    
+
     # Pytorch Dataloader
     inference_loader = DataLoader(inference_set, batch_size=args.batch_size, shuffle=False)
 
@@ -273,6 +351,20 @@ def parse_args():
     parser = argparse.ArgumentParser(
             description='Test a trained model in another dataset'
             )
+
+    parser.add_argument(
+            '--partition',
+            type=str,
+            default=None,
+            help='Numpy file of partition of 1KGP samples (use only when inferring on 1KGP). Default: %(default)s'
+            )
+
+    parser.add_argument(
+            '--fold',
+            type=int,
+            default=-1,
+            help='Fold number (use only when inferring on 1KGP). Default: %(default)s'
+            )
     
     parser.add_argument(
             '--test-h5',
@@ -299,14 +391,14 @@ def parse_args():
             '--snps-emb',
             type=str,
             required=True,
-            help='Filename of SNPs embedding. Provide full path'
+            help='SNPs embedding. Provide full path'
             )
     
     parser.add_argument(
             '--norm-stats',
             type=str,
             required=True,
-            help=('Filename of statistics used for normalization.'
+            help=('Statistics used for normalization.'
                   'Provide full path')
             )
     
