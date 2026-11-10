@@ -112,6 +112,7 @@ if ! python ${dietnet_code_path}/compute_1kgp_accuracy.py \
     --reps ${nb_reps} \
     --true-labels ${dietnet_files_path}/1KGP/1000G.2322samples.labels.txt; then
     echo "Exit."
+    rm ${output_name}.*
     exit 1
 fi
 
