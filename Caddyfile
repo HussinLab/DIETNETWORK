@@ -1,0 +1,25 @@
+{
+	# Let's Encrypt / ACME email comes from the ACME_EMAIL env var if set.
+	email {$ACME_EMAIL:admin@example.org}
+}
+
+{$DOMAIN:localhost} {
+	encode gzip
+
+	# FastAPI backend under /api/*, prefix stripped before proxying.
+	handle_path /api/* {
+		reverse_proxy backend:8000
+	}
+
+	# SvelteKit (Node adapter) for everything else.
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}

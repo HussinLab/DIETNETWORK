@@ -1,0 +1,47 @@
+# Local development overrides: run `docker compose -f docker-compose.yml -f docker-compose.dev.yml up`
+# Skips Caddy/TLS, publishes plain HTTP ports, relaxes cookie security so
+# the app works over http://localhost, and disables CAPTCHA so you don't
+# need real Turnstile keys to test locally.
+services:
+  backend:
+    environment:
+      ENVIRONMENT: development
+      COOKIE_SECURE: "false"
+      CAPTCHA_ENABLED: "false"
+      CORS_ORIGINS: http://localhost:5173
+      FRONTEND_URL: http://localhost:5173
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SMTP_USE_STARTTLS: "false"
+    ports:
+      - "8000:8000"
+    networks: [internal, web, default]
+
+  worker:
+    environment:
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SMTP_USE_STARTTLS: "false"
+
+  beat:
+    environment:
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SMTP_USE_STARTTLS: "false"
+
+  frontend:
+    environment:
+      PUBLIC_API_BASE_URL: http://localhost:8000
+      PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA # Cloudflare's always-pass test key
+    ports:
+      - "5173:3000"
+
+  caddy:
+    profiles: ["disabled-in-dev"] # not started by `docker compose up` in dev
+
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "8025:8025" # web UI to view "sent" emails
+      - "1025:1025"
+    networks: [internal]

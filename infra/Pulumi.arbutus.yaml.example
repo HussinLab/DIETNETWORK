@@ -1,0 +1,36 @@
+# Copy to Pulumi.arbutus.yaml, then run `pulumi stack select arbutus`
+# (create it first with `pulumi stack init arbutus`).
+#
+# Non-secret values can be edited directly in the copied file, or set with:
+#   pulumi config set dietnet-platform:adminCidr 203.0.113.4/32
+# Secrets MUST be set with --secret so they're encrypted at rest, e.g.:
+#   pulumi config set --secret dietnet-platform:dbPassword "$(openssl rand -base64 32)"
+config:
+  openstack:cloud: arbutus
+
+  # --- Required, non-secret ---
+  dietnet-platform:adminCidr: "203.0.113.4/32"       # YOUR admin IP for SSH -- do not use 0.0.0.0/0
+  dietnet-platform:externalNetworkName: "ext-net"      # ask your Arbutus project's external/provider network name
+  dietnet-platform:keypairPublicKey: "ssh-ed25519 AAAA... you@example.org"
+  dietnet-platform:imageName: "Ubuntu-22.04-Focal-x64-2024-01"  # check with `openstack image list`
+  dietnet-platform:flavorName: "p4-8gb"                # check with `openstack flavor list`; ~8 vCPU/16-32GB recommended, tune after measuring
+  dietnet-platform:volumeSizeGb: "150"
+  dietnet-platform:volumeType: "Encrypted-LUKS"         # check with `openstack volume type list`; must be an encrypted type
+  dietnet-platform:gitRepoUrl: "https://github.com/HussinLab/DIETNETWORK.git"
+  dietnet-platform:gitRef: "main"
+  dietnet-platform:domain: "ancestry.example.org"       # leave blank to use the floating IP with a self-signed cert
+  dietnet-platform:acmeEmail: "admin@example.org"
+
+  # --- Optional: reuse an existing network instead of creating one ---
+  # dietnet-platform:reuseExistingNetwork: "true"
+  # dietnet-platform:networkName: "existing-network-name"
+  # dietnet-platform:subnetName: "existing-subnet-name"
+
+  # --- Secrets: set these with `pulumi config set --secret`, never edit plaintext here ---
+  # dietnet-platform:dbPassword
+  # dietnet-platform:jwtSecret
+  # dietnet-platform:smtpHost
+  # dietnet-platform:smtpUsername
+  # dietnet-platform:smtpPassword
+  # dietnet-platform:turnstileSecretKey
+  # dietnet-platform:turnstileSiteKey   (site key is not sensitive but kept alongside for convenience)

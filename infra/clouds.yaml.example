@@ -1,0 +1,18 @@
+# Copy to clouds.yaml (same directory) and fill in an Arbutus Application
+# Credential: Horizon -> Identity -> Application Credentials -> Create.
+# Never use your personal password here, and never commit clouds.yaml with
+# real secrets -- it is gitignored.
+#
+# Point Pulumi/OpenStack at this file+cloud with:
+#   export OS_CLIENT_CONFIG_FILE=$(pwd)/infra/clouds.yaml
+#   pulumi config set openstack:cloud arbutus
+clouds:
+  arbutus:
+    auth:
+      auth_url: https://arbutus.cloud.computecanada.ca:5000/v3
+      application_credential_id: "REPLACE_ME"
+      application_credential_secret: "REPLACE_ME"
+    auth_type: v3applicationcredential
+    region_name: "RegionOne"
+    interface: "public"
+    identity_api_version: 3

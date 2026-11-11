@@ -1,0 +1,24 @@
+# Isolated overlay for tests/run_all.sh. Brought up under its own compose
+# project name (dietnet-test) so it never touches whatever's already running
+# under the default "dietnetwork" project on this host -- separate
+# containers, separate network, separate Postgres/Redis, separate data
+# volume (DATA_HOST_PATH in tests/.env.test).
+#
+# Frontend and Caddy are deliberately never started (not listed in
+# run_all.sh's `up`): every script under tests/ talks to the backend HTTP
+# API directly, so there's nothing for them to do here.
+#
+# Usage (see tests/run_all.sh for the full sequence):
+#   docker compose -p dietnet-test --env-file tests/.env.test \
+#     -f docker-compose.yml -f tests/docker-compose.test.yml \
+#     up -d --build postgres redis mailhog backend worker beat
+services:
+  backend:
+    ports:
+      - "18000:8000"
+
+  mailhog:
+    image: mailhog/mailhog
+    networks: [internal] # backend/worker reach it as `mailhog:1025`; humans/scripts read it via the API below
+    ports:
+      - "18025:8025" # web UI + REST API (tests/lib.py polls this for verification/notification emails)

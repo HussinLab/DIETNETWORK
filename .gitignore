@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 
+# Genotyping test data
+dataTest/
+
 # Private exp files
 .ipynb_checkpoints
 #*.ipynb
@@ -18,3 +21,26 @@ Dietnet/tests/filenames.py
 
 # Model weights
 Models_1KGP_24populations/
+
+# --- Web platform ---
+.env
+.env.*.local
+volumes/
+node_modules/
+frontend/build/
+frontend/.svelte-kit/
+*.pyc
+.pytest_cache/
+
+# --- Testing (see TESTING.md / tests/) ---
+tests/.volumes-test/
+dataTest/fixtures/
+
+# Pulumi
+infra/venv/
+infra/Pulumi.*.yaml
+!infra/Pulumi.yaml
+!infra/Pulumi.arbutus.yaml.example
+clouds.yaml
+infra/clouds.yaml
+

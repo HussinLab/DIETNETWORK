@@ -1,0 +1,113 @@
+#!/bin/bash
+# Rendered by infra/compute.py from Pulumi config/secrets. Runs once at
+# first boot as root. Idempotent-ish: safe to re-run via `cloud-init
+# clean && cloud-init init` if you need to re-provision.
+set -euxo pipefail
+exec > >(tee -a /var/log/dietnet-bootstrap.log) 2>&1
+
+echo "=== Diet Network platform bootstrap starting $(date -u) ==="
+
+# ---------------------------------------------------------------------
+# 1. Docker + Compose plugin
+# ---------------------------------------------------------------------
+apt-get update
+apt-get install -y ca-certificates curl gnupg git
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+systemctl enable --now docker
+
+# ---------------------------------------------------------------------
+# 2. Mount the encrypted Cinder data volume at /mnt/data
+#    (attached by Pulumi as the instance's second block device)
+# ---------------------------------------------------------------------
+DATA_DEV=""
+for dev in /dev/vdb /dev/sdb /dev/xvdb; do
+  if [ -b "$dev" ]; then DATA_DEV="$dev"; break; fi
+done
+
+if [ -z "$DATA_DEV" ]; then
+  echo "ERROR: could not find the attached data volume block device (checked vdb/sdb/xvdb)." >&2
+  exit 1
+fi
+
+if ! blkid "$DATA_DEV" > /dev/null 2>&1; then
+  echo "Formatting $DATA_DEV as ext4 (first boot only)..."
+  mkfs.ext4 -F "$DATA_DEV"
+fi
+
+mkdir -p /mnt/data
+UUID=$(blkid -s UUID -o value "$DATA_DEV")
+if ! grep -q "$UUID" /etc/fstab; then
+  echo "UUID=$UUID /mnt/data ext4 defaults,nofail 0 2" >> /etc/fstab
+fi
+mount -a
+
+mkdir -p /mnt/data/postgres /mnt/data/uploads
+# Pragmatic default for first deploy: official postgres image initdb's as a
+# non-root user inside the container. Tighten to a matched UID mapping
+# once you've confirmed the container's postgres UID for your image tag.
+chmod 0777 /mnt/data/postgres /mnt/data/uploads
+
+# ---------------------------------------------------------------------
+# 3. Fetch the application code
+# ---------------------------------------------------------------------
+APP_DIR=/opt/dietnet-platform
+if [ ! -d "$APP_DIR" ]; then
+  git clone --branch "__GIT_REF__" --depth 1 "__GIT_REPO_URL__" "$APP_DIR"
+else
+  git -C "$APP_DIR" fetch --depth 1 origin "__GIT_REF__"
+  git -C "$APP_DIR" checkout "__GIT_REF__"
+fi
+cd "$APP_DIR"
+
+# ---------------------------------------------------------------------
+# 4. Write .env from Pulumi config/secrets (never baked into the image)
+# ---------------------------------------------------------------------
+cat > "$APP_DIR/.env" <<ENVEOF
+DOMAIN=__DOMAIN__
+ACME_EMAIL=__ACME_EMAIL__
+BASE_URL=__BASE_URL__
+FRONTEND_URL=__FRONTEND_URL__
+PUBLIC_API_BASE_URL=__PUBLIC_API_BASE_URL__
+COOKIE_SECURE=true
+COOKIE_DOMAIN=
+
+POSTGRES_DB=dietnet
+POSTGRES_USER=dietnet
+POSTGRES_PASSWORD=__POSTGRES_PASSWORD__
+
+JWT_SECRET=__JWT_SECRET__
+
+CAPTCHA_ENABLED=true
+TURNSTILE_SECRET_KEY=__TURNSTILE_SECRET__
+PUBLIC_TURNSTILE_SITE_KEY=__TURNSTILE_SITE_KEY__
+
+SMTP_HOST=__SMTP_HOST__
+SMTP_PORT=__SMTP_PORT__
+SMTP_USERNAME=__SMTP_USERNAME__
+SMTP_PASSWORD=__SMTP_PASSWORD__
+SMTP_FROM_ADDRESS=__SMTP_FROM__
+
+RETENTION_DAYS=__RETENTION_DAYS__
+DELETE_RAW_AFTER_SUCCESS=__DELETE_RAW_AFTER_SUCCESS__
+
+DATA_HOST_PATH=/mnt/data
+ENVIRONMENT=production
+ENVEOF
+chmod 600 "$APP_DIR/.env"
+
+# ---------------------------------------------------------------------
+# 5. Bring the stack up
+#    (worker image build downloads the Zenodo model files ONCE here, at
+#    build time -- never at request time. See ops/scripts/fetch_zenodo_models.sh)
+# ---------------------------------------------------------------------
+docker compose --env-file .env up -d --build
+
+echo "=== Diet Network platform bootstrap complete $(date -u) ==="

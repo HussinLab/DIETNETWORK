@@ -1,0 +1,158 @@
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dietnet}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-dietnet}
+  DATABASE_URL_SYNC: postgresql+psycopg2://${POSTGRES_USER:-dietnet}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-dietnet}
+  REDIS_URL: redis://redis:6379/0
+  JWT_SECRET: ${JWT_SECRET:?}
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  BASE_URL: ${BASE_URL:-https://localhost}
+  FRONTEND_URL: ${FRONTEND_URL:-https://localhost}
+  CORS_ORIGINS: ${FRONTEND_URL:-https://localhost}
+  COOKIE_SECURE: ${COOKIE_SECURE:-true}
+  COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+  TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+  CAPTCHA_ENABLED: ${CAPTCHA_ENABLED:-true}
+  SMTP_HOST: ${SMTP_HOST:?}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-no-reply@example.org}
+  SMTP_USE_STARTTLS: ${SMTP_USE_STARTTLS:-true}
+  DATA_ROOT: /data
+  RETENTION_DAYS: ${RETENTION_DAYS:-30}
+  DELETE_RAW_AFTER_SUCCESS: ${DELETE_RAW_AFTER_SUCCESS:-true}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-1024}
+  GITHUB_ISSUES_URL: ${GITHUB_ISSUES_URL:-https://github.com/HussinLab/DIETNETWORK/issues}
+  # Caps simultaneous result-zip builds/downloads so they don't overrun the
+  # instance's disk headroom alongside uploads + in-flight processing.
+  MAX_CONCURRENT_DOWNLOADS: ${MAX_CONCURRENT_DOWNLOADS:-9}
+
+x-worker-env: &worker-env
+  DATABASE_URL_SYNC: postgresql+psycopg2://${POSTGRES_USER:-dietnet}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-dietnet}
+  REDIS_URL: redis://redis:6379/0
+  DATA_ROOT: /data
+  RETENTION_DAYS: ${RETENTION_DAYS:-30}
+  DELETE_RAW_AFTER_SUCCESS: ${DELETE_RAW_AFTER_SUCCESS:-true}
+  FRONTEND_URL: ${FRONTEND_URL:-https://localhost}
+  SMTP_HOST: ${SMTP_HOST:?}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-no-reply@example.org}
+  SMTP_USE_STARTTLS: ${SMTP_USE_STARTTLS:-true}
+  ENSEMBLE_WORKERS: ${ENSEMBLE_WORKERS:-1}
+  MAX_SAMPLES: ${MAX_SAMPLES:-10000}
+  MIN_RELIABLE_SNP_OVERLAP: ${MIN_RELIABLE_SNP_OVERLAP:-1000}
+  MAX_ALLELE_MISMATCH_FRACTION: ${MAX_ALLELE_MISMATCH_FRACTION:-0.05}
+  # How many inference jobs run in parallel -- the processing side of the
+  # concurrency cap (disk/CPU headroom), independent of the download cap
+  # above. CPU-only ensemble (deployPlan.md); tune against measured vCPU
+  # contention rather than assuming 9 is right for both disk and CPU.
+  CELERY_WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-9}
+  GITHUB_ISSUES_URL: ${GITHUB_ISSUES_URL:-https://github.com/HussinLab/DIETNETWORK/issues}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dietnet}
+      POSTGRES_USER: ${POSTGRES_USER:-dietnet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    volumes:
+      - ${DATA_HOST_PATH:-./volumes}/postgres:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dietnet}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No ports published: Postgres is reachable only from other containers
+    # on the `internal` network, never from outside the host.
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [internal]
+    # No ports published, same rationale as postgres.
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment: *backend-env
+    volumes:
+      - ${DATA_HOST_PATH:-./volumes}/uploads:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks: [internal, web]
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    restart: unless-stopped
+    environment: *worker-env
+    volumes:
+      - ${DATA_HOST_PATH:-./volumes}/uploads:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks: [internal]
+    # Structured so this service can move to its own instance later with no
+    # code changes -- REDIS_URL/DATABASE_URL_SYNC are already environment
+    # driven; only infra (security group + these two env vars) would change.
+
+  beat:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    restart: unless-stopped
+    command: ["celery", "-A", "worker.celery_app.celery_app", "beat", "--loglevel=INFO"]
+    environment: *worker-env
+    volumes:
+      - ${DATA_HOST_PATH:-./volumes}/uploads:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks: [internal]
+    # Daily 30-day retention sweep (worker/cleanup.py). If you'd rather not
+    # run Celery beat, disable this service and use the systemd timer in
+    # ops/scripts/cleanup_timer/ instead.
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-https://localhost/api}
+      PUBLIC_TURNSTILE_SITE_KEY: ${PUBLIC_TURNSTILE_SITE_KEY:-}
+      PUBLIC_GITHUB_ISSUES_URL: ${GITHUB_ISSUES_URL:-https://github.com/HussinLab/DIETNETWORK/issues}
+    networks: [web]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+      - "8443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [backend, frontend]
+    networks: [web]
+
+networks:
+  internal: {} # postgres + redis + worker/beat; no route to the host network
+  web: {} # caddy + frontend + backend
+
+volumes:
+  caddy_data:
+  caddy_config:

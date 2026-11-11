@@ -2,6 +2,12 @@
 
 A deep learning framework for genetic ancestry inference from SNP genotype data.
 
+> **Web platform:** this repo also includes a full production web platform
+> (SvelteKit + FastAPI + Celery + Postgres, deployed to Arbutus via Pulumi)
+> that lets registered users upload genotypes and run this inference
+> pipeline through a browser. See [DEPLOYMENT.md](DEPLOYMENT.md) and
+> [deployPlan.md](deployPlan.md) for the full design and setup steps.
+
 The released pretrained models were trained on the 1000 Genomes Project (1KGP) dataset to classify individuals into 24 populations.
 
 Pretrained models are available for download on [Zenodo](https://zenodo.org/records/16943452)

@@ -1,0 +1,13 @@
+[Unit]
+Description=Diet Network platform: 30-day retention sweep (worker.cleanup.cleanup_expired_jobs)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/dietnet-platform
+# Alternative to running Celery beat as a long-lived service: invokes the
+# exact same task the beat schedule would (worker/celery_app.py), so both
+# paths share one implementation (worker/cleanup.py). Use this OR the
+# `beat` docker-compose service, not both.
+ExecStart=/usr/bin/docker compose exec -T worker celery -A worker.celery_app.celery_app call worker.cleanup.cleanup_expired_jobs

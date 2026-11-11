@@ -1,0 +1,54 @@
+# Local test overlay for a shared server that already has other projects'
+# containers on it (see DX-Articles at /home/dx-llm/DX-Articles, whose own
+# nginx owns host ports 80/443, and whose backend owns 127.0.0.1:8000).
+#
+# Keeps the real production topology (Caddy terminating TLS in front of
+# frontend+backend). Caddy's host ports are 8080/8443 directly in
+# docker-compose.yml (80/443 are taken by another project on this box) --
+# not repeated here as an override, since Compose appends rather than
+# replaces list-type keys like `ports` across -f files.
+#
+# This overlay only adds things that merge safely (environment maps, a new
+# service):
+#   - swaps outbound SMTP for a throwaway MailHog so signup/job-complete
+#     emails can be verified without real SMTP creds
+#   - disables CAPTCHA server-side check and points the widget at
+#     Cloudflare's public always-pass test key, so signup works without
+#     real Turnstile keys
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.local-test.yml up --build -d
+#
+# Tear down:
+#   docker compose -f docker-compose.yml -f docker-compose.local-test.yml down
+services:
+  backend:
+    environment:
+      # Schema is applied by docker-entrypoint.sh (alembic upgrade head) on
+      # every boot now, regardless of ENVIRONMENT -- no override needed here.
+      CAPTCHA_ENABLED: "false"
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SMTP_USE_STARTTLS: "false"
+
+  worker:
+    environment:
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SMTP_USE_STARTTLS: "false"
+
+  beat:
+    environment:
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SMTP_USE_STARTTLS: "false"
+
+  frontend:
+    environment:
+      PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+
+  mailhog:
+    image: mailhog/mailhog
+    networks: [internal]
+    ports:
+      - "8025:8025" # web UI to view "sent" emails

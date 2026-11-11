@@ -1,0 +1,11 @@
+name: dietnet-platform
+runtime:
+  name: python
+  options:
+    virtualenv: venv
+description: >
+  Provisions the Diet Network ancestry inference platform on Arbutus
+  (OpenStack): networking, security groups, an encrypted Cinder data
+  volume, a floating IP, and a CPU VM bootstrapped via cloud-init to run
+  the docker-compose stack (Caddy, SvelteKit, FastAPI, Celery worker,
+  Postgres, Redis).
